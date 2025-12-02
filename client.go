@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -26,6 +28,7 @@ type Client struct {
 	baseURL      string
 	httpClient   *http.Client
 	debug        bool
+	rateLimiter  *rate.Limiter
 }
 
 // NewClient creates a new Infura Gas API client
@@ -123,6 +126,16 @@ func WithDebug(debug bool) ClientOption {
 	}
 }
 
+// WithRateLimit sets a rate limiter for the client
+// rate is the number of requests per second
+// burst is the maximum number of requests that can be made in a single burst
+// Example: WithRateLimit(10, 20) allows 10 requests per second with a burst of 20
+func WithRateLimit(ratePerSecond float64, burst int) ClientOption {
+	return func(c *Client) {
+		c.rateLimiter = rate.NewLimiter(rate.Limit(ratePerSecond), burst)
+	}
+}
+
 // hasSecret returns true if API Key Secret is provided
 func (c *Client) hasSecret() bool {
 	return c.apiKeySecret != ""
@@ -137,6 +150,13 @@ func (c *Client) getAuthHeader() string {
 
 // doRequest performs an HTTP request and returns the response
 func (c *Client) doRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Response, error) {
+	// Apply rate limiting if configured
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
+
 	url := c.baseURL + endpoint
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
